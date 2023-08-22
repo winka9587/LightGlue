@@ -198,9 +198,9 @@ def sigmoid_log_double_softmax(
     """ create the log assignment matrix from logits and similarity"""
     b, m, n = sim.shape
     certainties = F.logsigmoid(z0) + F.logsigmoid(z1).transpose(1, 2)
-    scores0 = F.log_softmax(sim, 2)
-    scores1 = F.log_softmax(
-        sim.transpose(-1, -2).contiguous(), 2).transpose(-1, -2)
+    # sim (b, m, n)
+    scores0 = F.log_softmax(sim, 2)  # 对每一列进行log_softmax
+    scores1 = F.log_softmax(sim.transpose(-1, -2).contiguous(), 2).transpose(-1, -2)
     scores = sim.new_full((b, m+1, n+1), 0)
     scores[:, :m, :n] = (scores0 + scores1 + certainties)
     scores[:, :-1, -1] = F.logsigmoid(-z0.squeeze(-1))
@@ -234,14 +234,21 @@ class MatchAssignment(nn.Module):
 
 def filter_matches(scores: torch.Tensor, th: float):
     """ obtain matches from a log assignment matrix [Bx M+1 x N+1]"""
-    max0, max1 = scores[:, :-1, :-1].max(2), scores[:, :-1, :-1].max(1)
-    m0, m1 = max0.indices, max1.indices
-    indices0 = torch.arange(m0.shape[1], device=m0.device)[None]
+    # [:, :-1, :-1] 不计算额外维度
+    max0, max1 = scores[:, :-1, :-1].max(2), scores[:, :-1, :-1].max(1)  # 取出两个维度的最大值
+    m0, m1 = max0.indices, max1.indices  # 最大值下标
+    # m0是每一行最大值的下标, (B, M+1), 每一行的最大值下标
+    # m1是每一行最大值的下标, (B, N+1)
+    indices0 = torch.arange(m0.shape[1], device=m0.device)[None]  # 生成[0,1,2..., shape[0]-1]
     indices1 = torch.arange(m1.shape[1], device=m1.device)[None]
+    # 不会有越界情况吗? 当M和N不等时
+    # 当M和N相差很大时候确实会有问题
+    # 将m0的第1维, M+1个, 替换为每行的最大值下标. 意义是: 第i行最大值在第k列, gather取第k列的最大值下标, indices0==比较是否是i. 也就是这个max是否是两边相互的
     mutual0 = indices0 == m1.gather(1, m0)
     mutual1 = indices1 == m0.gather(1, m1)
     max0_exp = max0.values.exp()
     zero = max0_exp.new_tensor(0)
+    # 如果满足条件, 那么此处为最大值max0_exp, 否则置为0
     mscores0 = torch.where(mutual0, max0_exp, zero)
     mscores1 = torch.where(mutual1, mscores0.gather(1, m1), zero)
     if th is not None:
@@ -369,7 +376,7 @@ class LightGlue(nn.Module):
             desc0 = desc0.half()
             desc1 = desc1.half()
 
-        desc0 = self.input_proj(desc0)
+        desc0 = self.input_proj(desc0)  # 如果输入dim和网络的目标dim不同, 使用
         desc1 = self.input_proj(desc1)
 
         # cache positional embeddings
